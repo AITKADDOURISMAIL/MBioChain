@@ -1,0 +1,7 @@
+venv/
+fvc/
+__pycache__/
+*.pkl
+results_temps/
+results_synthetique/
+results_fvc_moi/
