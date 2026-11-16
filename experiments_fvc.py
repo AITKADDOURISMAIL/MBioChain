@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from mbiochain.bio_key import Params, enroll, pin_factor, recover
+from mbiochain.ecc_codes import Hadamard, ReedSolomon
 from mbiochain.fp_align import enroll_bits, load_sample, query_bits
 
 PIN = "4821"
@@ -49,6 +50,7 @@ def main():
     ap.add_argument("--ks", default="2,3,4,5,6,8")
     ap.add_argument("--multi", action="store_true", help="enroll with majority vote of impressions 1-3")
     ap.add_argument("--mode", default="mixed", choices=["mixed", "density"])
+    ap.add_argument("--unlink-k", type=int, default=2, help="RS dimension for the cross-matching attack (small = attacker-friendly)")
     a = ap.parse_args()
     import mbiochain.fp_align as FA
     FA.MODE = a.mode
@@ -106,6 +108,34 @@ def main():
         print(f"  RS(16,{k_rs:2d}) key {7*k_rs:3d} bits: FRR {rows[-1]['FRR']:6.2f}%  FAR {rows[-1]['FAR']:6.2f}%  ({gt} gen / {it} imp)")
     with open(out / "accuracy_fvc.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+
+    # decodability (cross-matching) attack on two helper data records
+    def linked(h1, h2):
+        pp = h1.params
+        return ReedSolomon(pp.rs_n(), pp.rs_k, m=7).decode(Hadamard(6).decode(h1.offset ^ h2.offset)) is not None
+    unl = []
+    for permute in (False, True):
+        p = Params(rs_k=a.unlink_k, use_iris=False, use_finger=True, scrypt_n=2 ** 10, permute=permute)
+        same = fresh = non = n_same = n_fresh = n_non = 0
+        for f in fingers:
+            _, _, h1 = enroll(None, ref[f], PIN, p, epoch=0)
+            _, _, h1b = enroll(None, ref[f], PIN, p, epoch=1)
+            same += linked(h1, h1b); n_same += 1
+            for key in [k for k in Q if k[1] == f]:
+                _, _, h2 = enroll(None, Q[key], PIN, p, epoch=1)
+                if key[0] == "g":
+                    fresh += linked(h1, h2); n_fresh += 1
+                else:
+                    non += linked(h1, h2); n_non += 1
+        unl.append(dict(permutation=permute, rs=f"RS(16,{a.unlink_k})",
+                        mated_same_capture=round(100 * same / n_same, 2), n_same=n_same,
+                        mated_fresh_capture=round(100 * fresh / n_fresh, 2), n_fresh=n_fresh,
+                        nonmated=round(100 * non / n_non, 2), n_non=n_non))
+        u = unl[-1]
+        print(f"  Unlinkability permutation={permute!s:5s}: same capture {u['mated_same_capture']:6.2f}%  "
+              f"fresh capture {u['mated_fresh_capture']:6.2f}%  non-mated {u['nonmated']:6.2f}%")
+    with open(out / "unlinkability_fvc.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(unl[0])); w.writeheader(); w.writerows(unl)
 
     summary = dict(mode=a.mode, images=len(S), fingers=len(fingers), enrollment="majority 1-3" if a.multi else "impression 1",
                    feat_ms=round(1000 * statistics.mean(t_feat), 1), align_ms=round(1000 * statistics.mean(t_align), 1),

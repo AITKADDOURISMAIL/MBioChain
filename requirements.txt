@@ -1,0 +1,6 @@
+numpy
+cryptography
+matplotlib
+opencv-python
+scikit-image
+scipy
