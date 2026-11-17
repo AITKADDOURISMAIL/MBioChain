@@ -1,0 +1,15 @@
+config,rs,key_bits,FRR_mean,FRR_std,FAR_mean,FAR_std
+Iris only,"RS(32,8)",56,26.88,0.0,0.0,0.0
+Iris only,"RS(32,12)",84,27.19,0.53,0.0,0.0
+Iris only,"RS(32,16)",112,27.75,0.6,0.0,0.0
+Iris only,"RS(32,20)",140,29.12,0.53,0.0,0.0
+Iris only,"RS(32,24)",168,31.38,0.71,0.0,0.0
+Iris only,"RS(32,28)",196,35.06,0.75,0.0,0.0
+Fingerprint only,"RS(16,8)",56,4.88,0.87,44.69,0.66
+Fingerprint only,"RS(16,12)",84,7.75,1.22,32.23,0.54
+Iris + Fingerprint,"RS(48,8)",56,16.38,0.77,0.24,0.08
+Iris + Fingerprint,"RS(48,12)",84,17.5,0.88,0.05,0.04
+Iris + Fingerprint,"RS(48,16)",112,19.25,0.71,0.03,0.03
+Iris + Fingerprint,"RS(48,20)",140,20.38,0.67,0.01,0.02
+Iris + Fingerprint,"RS(48,24)",168,21.06,0.51,0.0,0.0
+Iris + Fingerprint,"RS(48,28)",196,22.81,0.68,0.0,0.0
