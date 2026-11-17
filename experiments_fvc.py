@@ -50,6 +50,7 @@ def main():
     ap.add_argument("--ks", default="2,3,4,5,6,8")
     ap.add_argument("--multi", action="store_true", help="enroll with majority vote of impressions 1-3")
     ap.add_argument("--mode", default="mixed", choices=["mixed", "density"])
+    ap.add_argument("--runs", type=int, default=10, help="repetitions (random secret per enrollment) -> mean +/- std")
     ap.add_argument("--unlink-k", type=int, default=2, help="RS dimension for the cross-matching attack (small = attacker-friendly)")
     a = ap.parse_args()
     import mbiochain.fp_align as FA
@@ -89,53 +90,63 @@ def main():
         for k in Q:
             w.writerow(["genuine" if k[0] == "g" else "impostor", k[1][0], round(float(np.mean(Q[k] != ref[k[1]])), 4)])
 
-    # fuzzy commitment, fingerprint only
-    rows = []
-    for k_rs in [int(x) for x in a.ks.split(",")]:
-        p = Params(rs_k=k_rs, use_iris=False, use_finger=True, scrypt_n=2 ** 10)
-        go = gt = io = it = 0
-        for f in fingers:
-            sk, pk, helper = enroll(None, ref[f], PIN, p)
-            kp = pin_factor(PIN, helper.salt, p)
-            for key in [k for k in Q if k[1] == f]:
-                r = recover(None, Q[key], PIN, helper, k_pin=kp)
-                if key[0] == "g":
-                    gt += 1; go += int(r is not None and r[1].public_numbers() == pk.public_numbers())
-                else:
-                    it += 1; io += int(r is not None)
-        rows.append(dict(rs=f"RS(16,{k_rs})", key_bits=7 * k_rs, t_symbols=(16 - k_rs) // 2,
-                         genuine=gt, impostor=it, FRR=round(100 * (1 - go / gt), 2), FAR=round(100 * io / it, 2)))
-        print(f"  RS(16,{k_rs:2d}) key {7*k_rs:3d} bits: FRR {rows[-1]['FRR']:6.2f}%  FAR {rows[-1]['FAR']:6.2f}%  ({gt} gen / {it} imp)")
-    with open(out / "accuracy_fvc.csv", "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
-
-    # decodability (cross-matching) attack on two helper data records
+    # fuzzy commitment, fingerprint only  (repeated --runs times: each enrollment draws a random secret)
     def linked(h1, h2):
         pp = h1.params
         return ReedSolomon(pp.rs_n(), pp.rs_k, m=7).decode(Hadamard(6).decode(h1.offset ^ h2.offset)) is not None
-    unl = []
-    for permute in (False, True):
-        p = Params(rs_k=a.unlink_k, use_iris=False, use_finger=True, scrypt_n=2 ** 10, permute=permute)
-        same = fresh = non = n_same = n_fresh = n_non = 0
-        for f in fingers:
-            _, _, h1 = enroll(None, ref[f], PIN, p, epoch=0)
-            _, _, h1b = enroll(None, ref[f], PIN, p, epoch=1)
-            same += linked(h1, h1b); n_same += 1
-            for key in [k for k in Q if k[1] == f]:
-                _, _, h2 = enroll(None, Q[key], PIN, p, epoch=1)
-                if key[0] == "g":
-                    fresh += linked(h1, h2); n_fresh += 1
-                else:
-                    non += linked(h1, h2); n_non += 1
-        unl.append(dict(permutation=permute, rs=f"RS(16,{a.unlink_k})",
-                        mated_same_capture=round(100 * same / n_same, 2), n_same=n_same,
-                        mated_fresh_capture=round(100 * fresh / n_fresh, 2), n_fresh=n_fresh,
-                        nonmated=round(100 * non / n_non, 2), n_non=n_non))
-        u = unl[-1]
-        print(f"  Unlinkability permutation={permute!s:5s}: same capture {u['mated_same_capture']:6.2f}%  "
-              f"fresh capture {u['mated_fresh_capture']:6.2f}%  non-mated {u['nonmated']:6.2f}%")
+
+    acc = {}                                    # k -> list of (FRR, FAR)
+    unl = {False: [], True: []}                 # permute -> list of (same, fresh, non)
+    for run in range(a.runs):
+        for k_rs in [int(x) for x in a.ks.split(",")]:
+            p = Params(rs_k=k_rs, use_iris=False, use_finger=True, scrypt_n=2 ** 10)
+            go = gt = io = it = 0
+            for f in fingers:
+                sk, pk, helper = enroll(None, ref[f], PIN, p)
+                kp = pin_factor(PIN, helper.salt, p)
+                for key in [k for k in Q if k[1] == f]:
+                    r = recover(None, Q[key], PIN, helper, k_pin=kp)
+                    if key[0] == "g":
+                        gt += 1; go += int(r is not None and r[1].public_numbers() == pk.public_numbers())
+                    else:
+                        it += 1; io += int(r is not None)
+            acc.setdefault(k_rs, []).append((100 * (1 - go / gt), 100 * io / it))
+        for permute in (False, True):
+            p = Params(rs_k=a.unlink_k, use_iris=False, use_finger=True, scrypt_n=2 ** 10, permute=permute)
+            same = fresh = non = n_same = n_fresh = n_non = 0
+            for f in fingers:
+                _, _, h1 = enroll(None, ref[f], PIN, p, epoch=0)
+                _, _, h1b = enroll(None, ref[f], PIN, p, epoch=1)
+                same += linked(h1, h1b); n_same += 1
+                for key in [k for k in Q if k[1] == f]:
+                    _, _, h2 = enroll(None, Q[key], PIN, p, epoch=1)
+                    if key[0] == "g":
+                        fresh += linked(h1, h2); n_fresh += 1
+                    else:
+                        non += linked(h1, h2); n_non += 1
+            unl[permute].append((100 * same / n_same, 100 * fresh / n_fresh, 100 * non / n_non))
+        print(f"  run {run + 1}/{a.runs} done")
+
+    ms = lambda v: (round(float(np.mean(v)), 2), round(float(np.std(v, ddof=1)) if len(v) > 1 else 0.0, 2))
+    rows = []
+    for k_rs, v in acc.items():
+        (frr, frr_sd), (far, far_sd) = ms([x[0] for x in v]), ms([x[1] for x in v])
+        rows.append(dict(rs=f"RS(16,{k_rs})", key_bits=7 * k_rs, runs=a.runs, genuine_per_run=gt, impostor_per_run=it,
+                         FRR_mean=frr, FRR_std=frr_sd, FAR_mean=far, FAR_std=far_sd))
+        print(f"  RS(16,{k_rs:2d}) key {7*k_rs:3d} bits: FRR {frr:6.2f} +/- {frr_sd:4.2f}%   FAR {far:6.2f} +/- {far_sd:4.2f}%")
+    with open(out / "accuracy_fvc.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+    urows = []
+    for permute, v in unl.items():
+        r = dict(permutation=permute, rs=f"RS(16,{a.unlink_k})", runs=a.runs)
+        for i, name in enumerate(["mated_same_capture", "mated_fresh_capture", "nonmated"]):
+            r[name + "_mean"], r[name + "_std"] = ms([x[i] for x in v])
+        urows.append(r)
+        print(f"  Unlinkability permutation={permute!s:5s}: same capture {r['mated_same_capture_mean']:6.2f} +/- {r['mated_same_capture_std']:.2f}%  "
+              f"fresh capture {r['mated_fresh_capture_mean']:6.2f} +/- {r['mated_fresh_capture_std']:.2f}%  "
+              f"non-mated {r['nonmated_mean']:6.2f} +/- {r['nonmated_std']:.2f}%")
     with open(out / "unlinkability_fvc.csv", "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(unl[0])); w.writeheader(); w.writerows(unl)
+        w = csv.DictWriter(fh, fieldnames=list(urows[0])); w.writeheader(); w.writerows(urows)
 
     summary = dict(mode=a.mode, images=len(S), fingers=len(fingers), enrollment="majority 1-3" if a.multi else "impression 1",
                    feat_ms=round(1000 * statistics.mean(t_feat), 1), align_ms=round(1000 * statistics.mean(t_align), 1),
